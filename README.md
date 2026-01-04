@@ -1,5 +1,5 @@
-# RUBAP
-## Real-Time User Behavior Analytics Platform
+# RUBAP: Real-Time User Behavior Analytics Platform
+<br>
 
 ## Overview
 
