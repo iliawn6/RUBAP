@@ -1,0 +1,63 @@
+version: '3.8'
+
+networks:
+  kafka-network:
+    driver: bridge
+
+volumes:
+  kafka-data:
+
+services:
+  kafka:
+    image: apache/kafka:latest
+    container_name: kafka-broker
+    networks:
+      - kafka-network
+    ports:
+      - "9092:9092"
+      - "9093:9093"
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    # KRaft mode - format storage and start Kafka
+    command: >
+      sh -c "
+      # Create custom server.properties for KRaft mode with Docker-specific settings
+      cat > /tmp/server.properties <<EOF
+      # KRaft mode configuration
+      process.roles=broker,controller
+      node.id=1
+      controller.quorum.voters=1@kafka:9093
+      
+      # Listeners
+      listeners=PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
+      advertised.listeners=PLAINTEXT://localhost:9092
+      inter.broker.listener.name=PLAINTEXT
+      controller.listener.names=CONTROLLER
+      listener.security.protocol.map=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      
+      # Log directories
+      log.dirs=/var/lib/kafka/data
+      
+      # Topic defaults
+      num.partitions=3
+      auto.create.topics.enable=true
+      
+      # Replication
+      offsets.topic.replication.factor=1
+      transaction.state.log.replication.factor=1
+      transaction.state.log.min.isr=1
+      EOF
+      # Format storage if not already formatted (required for KRaft)
+      if [ ! -f /var/lib/kafka/data/.formatted ]; then
+        /opt/kafka/bin/kafka-storage.sh format -t MkU3OEVBNTcwNTJENDM2Qk -c /tmp/server.properties
+        touch /var/lib/kafka/data/.formatted
+      fi
+      # Start Kafka server
+      /opt/kafka/bin/kafka-server-start.sh /tmp/server.properties
+      "
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+      start_period: 40s

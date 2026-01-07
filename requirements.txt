@@ -1,0 +1,5 @@
+# Python 3.7+ required
+
+# Kafka support (optional - only needed for direct Kafka connection)
+kafka-python>=2.0.2
+
