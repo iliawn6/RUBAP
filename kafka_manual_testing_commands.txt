@@ -1,0 +1,44 @@
+image:
+	docker pull apache/kafka:4.2.0-rc2
+
+
+
+
+run:
+	docker run -d --name=kafka -p 9092:9092 apache/kafka:4.2.0-rc2 
+
+
+
+
+kafka environment:
+	docker exec -ti kafka /opt/kafka/bin/kafka-cluster.sh cluster-id --bootstrap-server :9092
+ 	docker exec -it kafka bash
+
+
+
+ 	
+create topic:
+	cd opt/kafka/bin/
+	./kafka-broker-api-versions.sh --bootstrap-server localhost:9092
+	./kafka-topics.sh --bootstrap-server localhost:9092 --list
+	./kafka-topics.sh --bootstrap-server localhost:9092 --create --topic demo --partitions 3 --		 replication-factor 1
+
+
+
+
+consumer:
+	./kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic demo --from-beginning --property print.key=true --property print.partition=true --property print.offset=true --property print.timestamp=true
+	./kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic demo --from-beginning 
+	
+
+
+
+producer:
+	./kafka-console-producer.sh --bootstrap-server localhost:9092 --topic demo
+
+
+### MinIO ###
+
+
+docker run -d --name minio-lab -p 9000:9000 -p 9001:9001 -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minio123 minio/minio:latest server /data --console-address ":9001"
+

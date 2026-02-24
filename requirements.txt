@@ -1,0 +1,8 @@
+# Python 3.7+ required
+
+# Kafka support (optional - only needed for direct Kafka connection)
+kafka-python>=2.0.2
+
+# MinIO SDK (required for kafka_to_minio.py data lake consumer)
+minio>=7.0.0
+

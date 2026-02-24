@@ -19,6 +19,13 @@ from datetime import datetime
 from typing import Dict, Optional
 from enum import Enum
 
+# Optional Kafka support
+try:
+    from kafka import KafkaProducer
+    KAFKA_AVAILABLE = True
+except ImportError:
+    KAFKA_AVAILABLE = False
+
 
 class EventType(Enum):
     """Types of user behavior events"""
@@ -205,7 +212,13 @@ class UserBehaviorGenerator:
         
         return event
     
-    def stream_events(self, duration: Optional[int] = None, output_file: Optional[str] = None):
+    def stream_events(
+        self, 
+        duration: Optional[int] = None, 
+        output_file: Optional[str] = None,
+        kafka_bootstrap_servers: Optional[str] = None,
+        kafka_topic: Optional[str] = None
+    ):
         """
         Stream events in real-time with burst pattern
         
@@ -214,12 +227,37 @@ class UserBehaviorGenerator:
         Args:
             duration: Duration in seconds to stream (None for infinite)
             output_file: Optional file path to write events (None for stdout)
+            kafka_bootstrap_servers: Kafka bootstrap servers (e.g., 'localhost:9092')
+            kafka_topic: Kafka topic name to publish events to
         """
         start_time = time.time()
         event_count = 0
         interval_count = 0
         
-        output = open(output_file, 'w') if output_file else sys.stdout
+        # Initialize Kafka producer if requested
+        kafka_producer = None
+        if kafka_bootstrap_servers and kafka_topic:
+            if not KAFKA_AVAILABLE:
+                print("[ERROR] kafka-python library not installed. Install it with: pip install kafka-python", file=sys.stderr)
+                sys.exit(1)
+            try:
+                kafka_producer = KafkaProducer(
+                    bootstrap_servers=kafka_bootstrap_servers,
+                    value_serializer=lambda v: json.dumps(v).encode('utf-8'),
+                    acks='all',  # Wait for all replicas to acknowledge
+                    retries=3
+                )
+                print(f"[INFO] Connected to Kafka at {kafka_bootstrap_servers}, topic: {kafka_topic}", file=sys.stderr)
+            except Exception as e:
+                print(f"[ERROR] Failed to connect to Kafka: {e}", file=sys.stderr)
+                sys.exit(1)
+        
+        # Initialize file output if specified
+        output = None
+        if output_file and not kafka_producer:
+            output = open(output_file, 'w')
+        elif not kafka_producer:
+            output = sys.stdout
         
         try:
             while True:
@@ -229,11 +267,22 @@ class UserBehaviorGenerator:
                     for _ in range(5):
                         event = self.generate_event()
                         event_json = json.dumps(event)
-                        try:
-                            output.write(event_json + '\n')
-                            output.flush()
-                        except BrokenPipeError:
-                            return
+                        
+                        if kafka_producer:
+                            # Send to Kafka
+                            try:
+                                kafka_producer.send(kafka_topic, event)
+                            except Exception as e:
+                                print(f"[ERROR] Failed to send event to Kafka: {e}", file=sys.stderr)
+                                return
+                        else:
+                            # Write to file/stdout
+                            try:
+                                output.write(event_json + '\n')
+                                output.flush()
+                            except BrokenPipeError:
+                                return
+                        
                         event_count += 1
                         
                         if duration and (time.time() - start_time) >= duration:
@@ -242,11 +291,22 @@ class UserBehaviorGenerator:
                     # Normal: generate 1 event
                     event = self.generate_event()
                     event_json = json.dumps(event)
-                    try:
-                        output.write(event_json + '\n')
-                        output.flush()
-                    except BrokenPipeError:
-                        return
+                    
+                    if kafka_producer:
+                        # Send to Kafka
+                        try:
+                            kafka_producer.send(kafka_topic, event)
+                        except Exception as e:
+                            print(f"[ERROR] Failed to send event to Kafka: {e}", file=sys.stderr)
+                            return
+                    else:
+                        # Write to file/stdout
+                        try:
+                            output.write(event_json + '\n')
+                            output.flush()
+                        except BrokenPipeError:
+                            return
+                    
                     event_count += 1
                     
                     if duration and (time.time() - start_time) >= duration:
@@ -264,7 +324,10 @@ class UserBehaviorGenerator:
         except KeyboardInterrupt:
             print(f"\n[INFO] Interrupted. Generated {event_count} events total.", file=sys.stderr)
         finally:
-            if output_file and output != sys.stdout:
+            if kafka_producer:
+                kafka_producer.flush()
+                kafka_producer.close()
+            if output_file and output and output != sys.stdout:
                 output.close()
 
 
@@ -282,6 +345,9 @@ Examples:
   
   # Generate events with 1 second intervals
   python data_generator.py --user-id user_003 --interval 1
+  
+  # Send events directly to Kafka
+  python data_generator.py --user-id user_001 --interval 2 --kafka-bootstrap-servers localhost:9092 --kafka-topic user-events
         """
     )
     
@@ -313,6 +379,20 @@ Examples:
         help='Output file path (default: stdout, JSONL format)'
     )
     
+    parser.add_argument(
+        '--kafka-bootstrap-servers',
+        type=str,
+        default=None,
+        help='Kafka bootstrap servers (e.g., localhost:9092). If set, events will be sent to Kafka instead of stdout/file'
+    )
+    
+    parser.add_argument(
+        '--kafka-topic',
+        type=str,
+        default='user-events',
+        help='Kafka topic name (default: user-events)'
+    )
+    
     args = parser.parse_args()
     
     # Generate user_id if not provided
@@ -325,12 +405,22 @@ Examples:
     
     print(f"[INFO] User ID: {user_id}", file=sys.stderr)
     print(f"[INFO] Interval: {args.interval} seconds", file=sys.stderr)
-    print(f"[INFO] Output: {args.output or 'stdout'}", file=sys.stderr)
+    
+    if args.kafka_bootstrap_servers:
+        print(f"[INFO] Output: Kafka ({args.kafka_bootstrap_servers}, topic: {args.kafka_topic})", file=sys.stderr)
+    else:
+        print(f"[INFO] Output: {args.output or 'stdout'}", file=sys.stderr)
+    
     print(f"[INFO] Duration: {args.duration or 'infinite'} seconds", file=sys.stderr)
     print(f"[INFO] Pattern: After 2 intervals, generate 5 events immediately", file=sys.stderr)
     print(f"[INFO] Press Ctrl+C to stop\n", file=sys.stderr)
     
-    generator.stream_events(duration=args.duration, output_file=args.output)
+    generator.stream_events(
+        duration=args.duration, 
+        output_file=args.output,
+        kafka_bootstrap_servers=args.kafka_bootstrap_servers,
+        kafka_topic=args.kafka_topic
+    )
 
 
 if __name__ == "__main__":
