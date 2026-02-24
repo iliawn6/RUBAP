@@ -6,6 +6,7 @@ networks:
 
 volumes:
   kafka-data:
+  minio-data:
 
 services:
   kafka:
@@ -51,4 +52,39 @@ services:
     entrypoint: ["/bin/sh", "-c"]
     command:
       - "/opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:19092 --create --if-not-exists --topic user-events --partitions 3 --replication-factor 1 && echo 'Topic user-events ready.'"
+    restart: "no"
+
+  minio:
+    image: minio/minio:latest
+    container_name: minio
+    networks:
+      - kafka-network
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio-data:/data
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  minio-init:
+    image: minio/mc:latest
+    # image: minio/minio:latest
+    container_name: minio-init
+    networks:
+      - kafka-network
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - "mc alias set local http://minio:9000 minioadmin minioadmin && mc mb --ignore-existing local/user-events-lake && echo 'Bucket user-events-lake ready.'"
     restart: "no"

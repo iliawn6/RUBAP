@@ -31,11 +31,12 @@ The platform follows an **event-driven architecture**, in which user interaction
 - Optimized for operational access patterns
 - Provides fast access to current user activity data
 
-#### Cold Storage (Data Lake)
+#### Cold Storage (Data Lake) — MinIO
+- **MinIO** (`minio/minio:latest`) serves as the S3-compatible data lake
 - Immutable source of truth for raw event data
-- Time-based partitioning for efficient querying
-- Columnar storage formats for optimized processing
-- Supports long-term data retention
+- Time-based (Hive-style) partitioning for efficient querying: `year=YYYY/month=MM/day=DD/`
+- JSON batch files written by the `kafka_to_minio.py` consumer
+- Supports long-term data retention and is queryable by tools such as Spark, Trino, or DuckDB
 
 ### 3. Processing Layer
 
@@ -74,7 +75,64 @@ The platform follows an **event-driven architecture**, in which user interaction
 - Usage trends
 - Per-user behavioral summaries
 
-### 6. Event Generator
+### 6. Data Lake Consumer (`kafka_to_minio.py`)
+
+Bridges Kafka and the MinIO data lake by consuming the `user-events` topic and persisting batched events as JSON files.
+
+#### How It Works
+
+- Connects to Kafka as consumer group `minio-lake-consumer`
+- Buffers incoming messages and flushes to MinIO when either **100 messages** accumulate or **30 seconds** elapse — whichever comes first
+- Each flush creates one JSON file containing an array of events
+- Files are stored with Hive-style partitioning for downstream compatibility:
+
+```
+user-events-lake/
+└── user-events/
+    └── year=2025/
+        └── month=01/
+            └── day=15/
+                ├── 103045-p0-o0.json
+                ├── 103115-p1-o100.json
+                └── ...
+```
+
+#### Usage
+
+```bash
+# Install dependencies
+pip install -r requirements.txt
+
+# Run with defaults (Kafka at localhost:9092, MinIO at localhost:9000)
+python kafka_to_minio.py
+
+# Run with custom configuration via environment variables
+KAFKA_BOOTSTRAP=localhost:9092 \
+MINIO_ENDPOINT=localhost:9000 \
+MINIO_ACCESS_KEY=minioadmin \
+MINIO_SECRET_KEY=minioadmin \
+BATCH_SIZE=200 \
+FLUSH_INTERVAL_SECONDS=60 \
+python kafka_to_minio.py
+```
+
+#### Configuration
+
+| Environment Variable    | Default               | Description                              |
+|-------------------------|-----------------------|------------------------------------------|
+| `KAFKA_BOOTSTRAP`       | `localhost:9092`      | Kafka bootstrap server                   |
+| `KAFKA_TOPIC`           | `user-events`         | Topic to consume                         |
+| `KAFKA_GROUP_ID`        | `minio-lake-consumer` | Consumer group ID                        |
+| `MINIO_ENDPOINT`        | `localhost:9000`      | MinIO host:port                          |
+| `MINIO_ACCESS_KEY`      | `minioadmin`          | MinIO access key                         |
+| `MINIO_SECRET_KEY`      | `minioadmin`          | MinIO secret key                         |
+| `MINIO_BUCKET`          | `user-events-lake`    | Destination bucket                       |
+| `BATCH_SIZE`            | `100`                 | Messages per batch file                  |
+| `FLUSH_INTERVAL_SECONDS`| `30`                  | Max seconds between flushes              |
+
+> **Alternative — Kafka Connect + S3 Sink Connector:** The custom consumer was chosen to keep full control over the pipeline without introducing additional infrastructure. It can be replaced by **Kafka Connect** with the **S3 Sink Connector**, which provides the same functionality (Kafka topic → MinIO bucket) as a configuration-driven managed service. The trade-off is an additional JVM container and connector lifecycle management via REST API.
+
+### 7. Event Generator
 
 #### Real-Time Data Generator (`data_generator.py`)
 - **Purpose**: Generates realistic user behavior events in real-time streaming mode

@@ -1,35 +1,60 @@
-# Kafka Setup Guide
+# Kafka & MinIO Setup Guide
 
-This directory contains the Docker Compose configuration for running Kafka in the RUBAP project.
+This directory contains the Docker Compose configuration for running Kafka and MinIO in the RUBAP project.
 
 ## Prerequisites
 
 - Docker and Docker Compose installed
-- Python 3.7+ with `kafka-python` library (optional, for direct Kafka connection)
+- Python 3.7+ with `kafka-python` and `minio` libraries (optional, for direct connections)
 
 ## Quick Start
 
-### 1. Start Kafka Services
+### 1. Start All Services
 
 ```bash
 cd RUBAP/Compose-file
-docker-compose -f Kafka-compose.yml up -d
+docker-compose -f kafka-compose.yml up -d
 ```
 
 This will start:
-- **Zookeeper** on port `2181`
-- **Kafka Broker** on port `9092`
+- **Kafka Broker** on ports `9092` (external) and `9093` (controller)
+- **kafka-init** — one-shot container that creates the `user-events` topic
+- **MinIO** on ports `9000` (S3 API) and `9001` (web console)
+- **minio-init** — one-shot container that creates the `user-events-lake` bucket
 
-### 2. Verify Kafka is Running
+### 2. Verify Services are Running
 
-Check if services are healthy:
 ```bash
-docker-compose -f Kafka-compose.yml ps
+docker-compose -f kafka-compose.yml ps
 ```
 
-You should see both `zookeeper` and `kafka-broker` services running.
+All services should show as running (or `Exited (0)` for the init containers).
 
-### 3. Create a Topic (Optional)
+### 3. Access MinIO Web Console
+
+Open [http://localhost:9001](http://localhost:9001) in your browser.
+
+| Field    | Value        |
+|----------|--------------|
+| Username | `minioadmin` |
+| Password | `minioadmin` |
+
+The `user-events-lake` bucket is created automatically on first start.
+
+### 4. Start the Data Lake Consumer
+
+In a separate terminal, run the Kafka → MinIO consumer (after installing dependencies):
+
+```bash
+pip install -r RUBAP/requirements.txt
+python RUBAP/kafka_to_minio.py
+```
+
+The consumer reads from the `user-events` topic and writes batched JSON files to the `user-events-lake` MinIO bucket. See `kafka_to_minio.py` for available environment variables.
+
+> **Alternative:** `kafka_to_minio.py` can be replaced with **Kafka Connect + S3 Sink Connector** for a fully managed, configuration-driven pipeline without custom code.
+
+### 5. Create a Topic (Optional)
 
 Kafka is configured to auto-create topics, but you can manually create one:
 
@@ -41,7 +66,7 @@ docker exec -it kafka-broker kafka-topics.sh --create \
   --replication-factor 1
 ```
 
-### 4. Connect Data Generator to Kafka
+### 6. Connect Data Generator to Kafka
 
 #### Option A: Direct Kafka Connection (Recommended)
 
@@ -67,7 +92,7 @@ python RUBAP/data_generator.py --user-id user_001 --interval 2 | \
   --topic user-events
 ```
 
-### 5. Consume Events from Kafka
+### 7. Consume Events from Kafka
 
 To verify events are being produced, consume from the topic:
 
@@ -99,24 +124,24 @@ python RUBAP/data_generator.py --user-id user_003 --interval 2 \
 ## Stop Services
 
 ```bash
-docker-compose -f Kafka-compose.yml down
+docker-compose -f kafka-compose.yml down
 ```
 
-To remove volumes (delete all data):
+To remove volumes (delete all data, including MinIO objects):
 ```bash
-docker-compose -f Kafka-compose.yml down -v
+docker-compose -f kafka-compose.yml down -v
 ```
 
 ## Troubleshooting
 
 ### Check Kafka Logs
 ```bash
-docker-compose -f Kafka-compose.yml logs kafka
+docker-compose -f kafka-compose.yml logs kafka
 ```
 
-### Check Zookeeper Logs
+### Check MinIO Logs
 ```bash
-docker-compose -f Kafka-compose.yml logs zookeeper
+docker-compose -f kafka-compose.yml logs minio
 ```
 
 ### List Topics
@@ -126,20 +151,27 @@ docker exec -it kafka-broker kafka-topics.sh --list --bootstrap-server localhost
 
 ### Describe Topic
 ```bash
-docker exec -it kafka-broker kafka-topics.sh --describe \
+docker exec -it kafka-broker /opt/kafka/bin/kafka-topics.sh --describe \
   --bootstrap-server localhost:9092 \
   --topic user-events
 ```
 
 ## Configuration
 
-The Kafka setup is configured with:
+### Kafka
+- **Mode**: KRaft (no Zookeeper)
 - **Auto-create topics**: Enabled
 - **Default partitions**: 3
 - **Replication factor**: 1 (suitable for development)
-- **Port**: 9092 (external), 9093 (internal)
+- **Ports**: `9092` (external), `9093` (controller)
 
-To modify these settings, edit `Kafka-compose.yml` and restart the services.
+### MinIO
+- **API port**: `9000`
+- **Web console port**: `9001`
+- **Default credentials**: `minioadmin` / `minioadmin`
+- **Default bucket**: `user-events-lake`
+
+To modify these settings, edit `kafka-compose.yml` and restart the services.
 
 
 
