@@ -6,3 +6,5 @@ kafka-python>=2.0.2
 # MinIO SDK (required for kafka_to_minio.py data lake consumer)
 minio>=7.0.0
 
+# MongoDB driver (required for kafka_to_mongo.py hot storage consumer)
+pymongo>=4.0.0
