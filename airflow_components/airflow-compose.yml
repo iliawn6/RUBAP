@@ -17,7 +17,7 @@ x-airflow-common: &airflow-common
   env_file:
     - .env
   environment:
-    _PIP_ADDITIONAL_REQUIREMENTS: apache-airflow-providers-amazon
+    _PIP_ADDITIONAL_REQUIREMENTS: apache-airflow-providers-amazon airflow-clickhouse-plugin
     AIRFLOW__CORE__EXECUTOR: LocalExecutor
     AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
     AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW__CORE__FERNET_KEY}
@@ -25,6 +25,7 @@ x-airflow-common: &airflow-common
     AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
     AIRFLOW__API__AUTH_BACKENDS: 'airflow.api.auth.backend.basic_auth'
     AIRFLOW_CONN_MINIO_S3: ${AIRFLOW_CONN_MINIO_S3}
+    AIRFLOW_CONN_CLICKHOUSE_DEFAULT: ${AIRFLOW_CONN_CLICKHOUSE_DEFAULT}
   volumes:
     - ./dags:/opt/airflow/dags
     - ./logs:/opt/airflow/logs
@@ -41,6 +42,7 @@ networks:
 
 volumes:
   postgres-db-volume:
+  clickhouse-data:
 
 services:
   postgres:
@@ -94,3 +96,48 @@ services:
     depends_on:
       airflow-init:
         condition: service_completed_successfully
+
+  clickhouse:
+    image: clickhouse:latest
+    container_name: clickhouse
+    env_file:
+      - .env
+    environment:
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
+    ports:
+      - "8123:8123"
+      - "9900:9000"
+    volumes:
+      - clickhouse-data:/var/lib/clickhouse
+    networks:
+      - airflow-internal
+    healthcheck:
+      test: ["CMD", "clickhouse-client", "--query", "SELECT 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  clickhouse-init:
+    image: clickhouse:latest
+    container_name: clickhouse-init
+    environment:
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
+    networks:
+      - airflow-internal
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    entrypoint: ["clickhouse-client", "--host", "clickhouse", "--password", "${CLICKHOUSE_PASSWORD}", "--query"]
+    command:
+      - |
+        CREATE TABLE IF NOT EXISTS default.user_events (
+            event_id     String,
+            event_type   String,
+            ts           DateTime,
+            user_id      String,
+            properties   String
+        ) ENGINE = MergeTree()
+        PARTITION BY toYYYYMM(ts)
+        ORDER BY (user_id, ts)
+    restart: "no"
