@@ -7,6 +7,7 @@ networks:
 volumes:
   kafka-data:
   minio-data:
+  mongo-data:
 
 services:
   kafka:
@@ -87,4 +88,33 @@ services:
     entrypoint: ["/bin/sh", "-c"]
     command:
       - "mc alias set local http://minio:9000 minioadmin minioadmin && mc mb --ignore-existing local/user-events-lake && echo 'Bucket user-events-lake ready.'"
+    restart: "no"
+
+  mongo:
+    image: mongo:8
+    container_name: mongo
+    networks:
+      - kafka-network
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo-data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  mongo-init:
+    image: mongo:8
+    container_name: mongo-init
+    networks:
+      - kafka-network
+    depends_on:
+      mongo:
+        condition: service_healthy
+    entrypoint: ["mongosh", "--host", "mongo", "--eval"]
+    command:
+      - "db.getSiblingDB('hot_storage').user_events.createIndex({'_ingested_at': 1}, {expireAfterSeconds: 3600}); print('TTL index ready.')"
     restart: "no"

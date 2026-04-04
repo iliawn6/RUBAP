@@ -1,0 +1,104 @@
+"""
+ETL DAG: MinIO (Data Lake) → ClickHouse OLAP.
+
+Reads JSON batch files from user-events-lake, parses events, and inserts
+into the ClickHouse user_events table.
+"""
+
+import json
+from datetime import datetime
+
+from airflow import DAG
+from airflow.providers.amazon.aws.hooks.s3 import S3Hook
+from airflow.operators.python import PythonOperator
+from airflow_clickhouse_plugin.hooks.clickhouse import ClickHouseHook
+
+BUCKET = "user-events-lake"
+PREFIX = "user-events/"
+
+
+def check_clickhouse(**context):
+    """Assert ClickHouse connectivity via a simple query."""
+    hook = ClickHouseHook(clickhouse_conn_id="clickhouse_default")
+    hook.execute("SELECT 1")
+    context["ti"].xcom_push(key="clickhouse_ok", value=True)
+
+
+def read_minio_files(**context):
+    """List and download JSON files from MinIO for execution date, push events to XCom."""
+    execution_date = context["execution_date"]
+    year = execution_date.strftime("%Y")
+    month = execution_date.strftime("%m")
+    day = execution_date.strftime("%d")
+    date_prefix = f"{PREFIX}year={year}/month={month}/day={day}/"
+
+    hook = S3Hook(aws_conn_id="minio_s3")
+    keys = hook.list_keys(bucket_name=BUCKET, prefix=date_prefix) or []
+    events = []
+    for key in keys:
+        obj = hook.get_key(key=key, bucket_name=BUCKET)
+        if obj:
+            content = obj.get()["Body"].read().decode("utf-8")
+            batch = json.loads(content)
+            if isinstance(batch, list):
+                events.extend(batch)
+            else:
+                events.append(batch)
+
+    context["ti"].xcom_push(key="events", value=events)
+    return len(events)
+
+
+def insert_into_clickhouse(**context):
+    """Insert events from XCom into ClickHouse user_events table."""
+    events = context["ti"].xcom_pull(task_ids="read_minio_files", key="events") or []
+    if not events:
+        print("No events to insert, skipping.")
+        return 0
+
+    rows = []
+    for e in events:
+        event_id = str(e.get("event_id", ""))
+        event_type = str(e.get("event_type", ""))
+        ts_str = e.get("timestamp", "")
+        user_id = str(e.get("user_id", ""))
+        props = json.dumps(e.get("properties", {}), ensure_ascii=False)
+
+        try:
+            dt = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+            ts_clickhouse = dt.strftime("%Y-%m-%d %H:%M:%S")
+        except (ValueError, TypeError):
+            ts_clickhouse = "1970-01-01 00:00:00"
+
+        rows.append((event_id, event_type, ts_clickhouse, user_id, props))
+
+    hook = ClickHouseHook(clickhouse_conn_id="clickhouse_default")
+    client = hook.get_conn()
+    client.execute(
+        "INSERT INTO default.user_events (event_id, event_type, ts, user_id, properties) VALUES",
+        rows,
+    )
+    print(f"Inserted {len(rows)} rows into ClickHouse user_events")
+    return len(rows)
+
+
+with DAG(
+    dag_id="minio_to_clickhouse",
+    schedule="@daily",
+    start_date=datetime(2026, 1, 1),
+    catchup=False,
+    tags=["data_lake", "minio", "clickhouse", "etl"],
+) as dag:
+    task_check_clickhouse = PythonOperator(
+        task_id="check_clickhouse",
+        python_callable=check_clickhouse,
+    )
+    task_read_minio = PythonOperator(
+        task_id="read_minio_files",
+        python_callable=read_minio_files,
+    )
+    task_insert_clickhouse = PythonOperator(
+        task_id="insert_into_clickhouse",
+        python_callable=insert_into_clickhouse,
+    )
+    task_check_clickhouse >> task_read_minio >> task_insert_clickhouse

@@ -1,11 +1,11 @@
-# Kafka & MinIO Setup Guide
+# Kafka, MinIO & MongoDB Setup Guide
 
-This directory contains the Docker Compose configuration for running Kafka and MinIO in the RUBAP project.
+This directory contains the Docker Compose configuration for running Kafka, MinIO, and MongoDB in the RUBAP project.
 
 ## Prerequisites
 
 - Docker and Docker Compose installed
-- Python 3.7+ with `kafka-python` and `minio` libraries (optional, for direct connections)
+- Python 3.7+ with `kafka-python`, `minio`, and `pymongo` (optional, for direct connections and consumers)
 
 ## Quick Start
 
@@ -21,6 +21,8 @@ This will start:
 - **kafka-init** — one-shot container that creates the `user-events` topic
 - **MinIO** on ports `9000` (S3 API) and `9001` (web console)
 - **minio-init** — one-shot container that creates the `user-events-lake` bucket
+- **MongoDB** on port `27017` (hot storage)
+- **mongo-init** — one-shot container that creates the TTL index on `hot_storage.user_events` (1-hour expiry)
 
 ### 2. Verify Services are Running
 
@@ -54,7 +56,37 @@ The consumer reads from the `user-events` topic and writes batched JSON files to
 
 > **Alternative:** `kafka_to_minio.py` can be replaced with **Kafka Connect + S3 Sink Connector** for a fully managed, configuration-driven pipeline without custom code.
 
-### 5. Create a Topic (Optional)
+### 5. MongoDB Hot Storage Consumer (Optional)
+
+To populate MongoDB with the last 1 hour of events from Kafka, run the hot storage consumer in a separate terminal:
+
+```bash
+pip install -r RUBAP/requirements.txt
+python RUBAP/kafka_to_mongo.py
+```
+
+The consumer reads from the same `user-events` topic (using consumer group `mongo-hot-consumer`) and inserts events into MongoDB database `hot_storage`, collection `user_events`. Documents are automatically removed after 1 hour by MongoDB's TTL index on `_ingested_at`.
+
+**Environment variables** (optional overrides):
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `KAFKA_BOOTSTRAP` | `localhost:9092` | Kafka bootstrap server |
+| `KAFKA_TOPIC` | `user-events` | Topic to consume |
+| `KAFKA_GROUP_ID` | `mongo-hot-consumer` | Consumer group ID |
+| `MONGO_URI` | `mongodb://localhost:27017` | MongoDB connection URI |
+| `MONGO_DB` | `hot_storage` | Database name |
+| `MONGO_COLLECTION` | `user_events` | Collection name |
+| `BATCH_SIZE` | `100` | Messages per batch insert |
+| `FLUSH_INTERVAL_SECONDS` | `30` | Max seconds between flushes |
+
+Example with custom MongoDB URI (e.g. when running consumers inside Docker network):
+
+```bash
+MONGO_URI=mongodb://mongo:27017 python RUBAP/kafka_to_mongo.py
+```
+
+### 6. Create a Topic (Optional)
 
 Kafka is configured to auto-create topics, but you can manually create one:
 
@@ -66,7 +98,7 @@ docker exec -it kafka-broker kafka-topics.sh --create \
   --replication-factor 1
 ```
 
-### 6. Connect Data Generator to Kafka
+### 7. Connect Data Generator to Kafka
 
 #### Option A: Direct Kafka Connection (Recommended)
 
@@ -92,7 +124,7 @@ python RUBAP/data_generator.py --user-id user_001 --interval 2 | \
   --topic user-events
 ```
 
-### 7. Consume Events from Kafka
+### 8. Consume Events from Kafka
 
 To verify events are being produced, consume from the topic:
 
@@ -144,6 +176,11 @@ docker-compose -f kafka-compose.yml logs kafka
 docker-compose -f kafka-compose.yml logs minio
 ```
 
+### Check MongoDB Logs
+```bash
+docker-compose -f kafka-compose.yml logs mongo
+```
+
 ### List Topics
 ```bash
 docker exec -it kafka-broker kafka-topics.sh --list --bootstrap-server localhost:9092
@@ -170,6 +207,13 @@ docker exec -it kafka-broker /opt/kafka/bin/kafka-topics.sh --describe \
 - **Web console port**: `9001`
 - **Default credentials**: `minioadmin` / `minioadmin`
 - **Default bucket**: `user-events-lake`
+
+### MongoDB
+- **Image**: `mongo:8`
+- **Port**: `27017`
+- **Hot storage database**: `hot_storage`
+- **Collection**: `user_events`
+- **TTL**: Documents expire 1 hour after `_ingested_at` (index created by mongo-init)
 
 To modify these settings, edit `kafka-compose.yml` and restart the services.
 
