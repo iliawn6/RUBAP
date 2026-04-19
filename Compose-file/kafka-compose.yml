@@ -118,3 +118,27 @@ services:
     command:
       - "db.getSiblingDB('hot_storage').user_events.createIndex({'_ingested_at': 1}, {expireAfterSeconds: 3600}); print('TTL index ready.')"
     restart: "no"
+
+  api:
+    build:
+      context: ../
+      dockerfile: Dockerfile.api
+    container_name: rubap-api
+    networks:
+      - kafka-network
+    depends_on:
+      mongo:
+        condition: service_healthy
+    environment:
+      MONGO_URI: mongodb://mongo:27017
+      MONGO_DB: hot_storage
+      MONGO_COLLECTION: user_events
+      CLICKHOUSE_HOST: host.docker.internal
+      CLICKHOUSE_PORT: 8123
+      CLICKHOUSE_USER: default
+      CLICKHOUSE_PASSWORD: clickhouse
+      CLICKHOUSE_DATABASE: default
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "8000:8000"
