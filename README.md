@@ -197,7 +197,7 @@ Each event follows this structure:
 ```bash
 # 1) Start Kafka + MinIO + Mongo + API
 cd RUBAP/Compose-file
-docker-compose -f kafka-compose.yml up -d
+docker compose -f kafka-compose.yml up -d
 
 # 2) Start Airflow + ClickHouse
 cd ../airflow_components
