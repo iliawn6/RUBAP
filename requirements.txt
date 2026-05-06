@@ -7,4 +7,9 @@ kafka-python>=2.0.2
 minio>=7.0.0
 
 # MongoDB driver (required for kafka_to_mongo.py hot storage consumer)
-pymongo>=4.0.0
+pymongo>=4.0.0# FastAPI serving layer dependencies
+fastapi
+uvicorn[standard]
+motor
+clickhouse-connect
+pydantic-settings
