@@ -192,6 +192,28 @@ Each event follows this structure:
 5. **Analytical Storage**: Processed data is loaded into real-time analytical database and cloud data warehouse
 6. **Serving**: RESTful API exposes metrics and insights to downstream consumers
 
+## How to Run the Whole Platform
+
+```bash
+# 1) Start Kafka + MinIO + Mongo + API
+cd RUBAP/Compose-file
+docker-compose -f kafka-compose.yml up -d
+
+# 2) Start Airflow + ClickHouse
+cd ../airflow_components
+docker compose -f airflow-compose.yml up -d
+
+# 3) Back to repo root
+cd ..
+
+# 4) Run Kafka consumers (in 2 separate terminals)
+python RUBAP/kafka_to_minio.py
+python RUBAP/kafka_to_mongo.py
+
+# 5) Generate events
+python RUBAP/data_generator.py --user-id user_001 --interval 2 --kafka-bootstrap-servers localhost:9092 --kafka-topic user-events
+```
+
 ## Features
 
 - **Dual-Mode Processing**: Supports both streaming and batch processing modes
