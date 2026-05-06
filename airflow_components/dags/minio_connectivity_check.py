@@ -26,7 +26,7 @@ def list_lake_files(**context):
     hook = S3Hook(aws_conn_id="minio_s3")
     keys = hook.list_keys(bucket_name=BUCKET, prefix=PREFIX)
     count = len(keys) if keys else 0
-    sample = keys[:5] if keys else []
+    sample = keys[-5:] if keys else []
     print(f"Found {count} file(s) under {PREFIX}")
     for k in sample:
         print(f"  - {k}")

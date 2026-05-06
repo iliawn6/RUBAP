@@ -6,15 +6,17 @@ into the ClickHouse user_events table.
 """
 
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 
 from airflow import DAG
+from airflow.models import Variable
 from airflow.providers.amazon.aws.hooks.s3 import S3Hook
 from airflow.operators.python import PythonOperator
 from airflow_clickhouse_plugin.hooks.clickhouse import ClickHouseHook
 
 BUCKET = "user-events-lake"
 PREFIX = "user-events/"
+PROCESSED_KEYS_VAR = "minio_to_clickhouse_processed_keys"
 
 
 def check_clickhouse(**context):
@@ -25,7 +27,7 @@ def check_clickhouse(**context):
 
 
 def read_minio_files(**context):
-    """List and download JSON files from MinIO for execution date, push events to XCom."""
+    """Read only new MinIO objects for execution date and push events to XCom."""
     execution_date = context["execution_date"]
     year = execution_date.strftime("%Y")
     month = execution_date.strftime("%m")
@@ -34,8 +36,15 @@ def read_minio_files(**context):
 
     hook = S3Hook(aws_conn_id="minio_s3")
     keys = hook.list_keys(bucket_name=BUCKET, prefix=date_prefix) or []
+    processed_raw = Variable.get(PROCESSED_KEYS_VAR, default_var="[]")
+    try:
+        processed_keys = set(json.loads(processed_raw))
+    except json.JSONDecodeError:
+        processed_keys = set()
+
+    new_keys = [key for key in keys if key not in processed_keys]
     events = []
-    for key in keys:
+    for key in new_keys:
         obj = hook.get_key(key=key, bucket_name=BUCKET)
         if obj:
             content = obj.get()["Body"].read().decode("utf-8")
@@ -46,12 +55,16 @@ def read_minio_files(**context):
                 events.append(batch)
 
     context["ti"].xcom_push(key="events", value=events)
+    context["ti"].xcom_push(key="processed_keys_batch", value=new_keys)
     return len(events)
 
 
 def insert_into_clickhouse(**context):
     """Insert events from XCom into ClickHouse user_events table."""
     events = context["ti"].xcom_pull(task_ids="read_minio_files", key="events") or []
+    processed_keys_batch = context["ti"].xcom_pull(
+        task_ids="read_minio_files", key="processed_keys_batch"
+    ) or []
     if not events:
         print("No events to insert, skipping.")
         return 0
@@ -65,10 +78,11 @@ def insert_into_clickhouse(**context):
         props = json.dumps(e.get("properties", {}), ensure_ascii=False)
 
         try:
-            dt = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
-            ts_clickhouse = dt.strftime("%Y-%m-%d %H:%M:%S")
+            ts_clickhouse = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+            if ts_clickhouse.tzinfo is None:
+                ts_clickhouse = ts_clickhouse.replace(tzinfo=timezone.utc)
         except (ValueError, TypeError):
-            ts_clickhouse = "1970-01-01 00:00:00"
+            ts_clickhouse = datetime(1970, 1, 1, tzinfo=timezone.utc)
 
         rows.append((event_id, event_type, ts_clickhouse, user_id, props))
 
@@ -78,6 +92,14 @@ def insert_into_clickhouse(**context):
         "INSERT INTO default.user_events (event_id, event_type, ts, user_id, properties) VALUES",
         rows,
     )
+    if processed_keys_batch:
+        processed_raw = Variable.get(PROCESSED_KEYS_VAR, default_var="[]")
+        try:
+            processed_keys = set(json.loads(processed_raw))
+        except json.JSONDecodeError:
+            processed_keys = set()
+        processed_keys.update(processed_keys_batch)
+        Variable.set(PROCESSED_KEYS_VAR, json.dumps(sorted(processed_keys)))
     print(f"Inserted {len(rows)} rows into ClickHouse user_events")
     return len(rows)
 

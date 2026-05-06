@@ -42,3 +42,19 @@ producer:
 
 docker run -d --name minio-lab -p 9000:9000 -p 9001:9001 -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minio123 minio/minio:latest server /data --console-address ":9001"
 
+
+### Mongo ###
+
+curl localhost:27017
+docker exec -it mongo mongosh
+
+show dbs
+use hot_storage
+db.user_events.find()
+
+
+### ClickHouse ### 
+
+docker exec -it clickhouse clickhouse-client
+The rest is exactly SQL
+
